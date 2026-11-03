@@ -53,6 +53,34 @@ The video and screenshots stay available in the PR. **Tekrar dene** (Retry) in t
 
 If the flow fails without a crash (for example, on a busy machine the keyboard doesn't close in time and covers a button), it is retried once. A crash is never retried.
 
+## How it works in pictures
+
+A real run on the sample app Recoup, from the crash reaching Sentry to the PR with the video.
+
+**1. Listening.** After **Başlat** (Start), the app polls Sentry and both devices are ready (**Hazır**). The crash list is empty. The terminal on the right shows the system log: polling every 60 seconds, the webhook off because `server.publicUrl` is empty, and the iOS simulator booted.
+
+![The app listening for crashes, with the Android emulator and iOS simulator ready](docs/images/01-listening.png)
+
+**2. A crash reaches Sentry.** A user taps the version line in Settings five times, and the release `1.1.0+110` crashes with `IllegalStateException: Sentry test crash`.
+
+![The issue in Sentry](docs/images/02-sentry-issue.png)
+
+**3. The crash is picked up.** At the next poll, the crash appears in the list with its project, platform and release. Its run starts right away (**Analiz**, Analyze). The run gets its own terminal tab next to **Sistem** (System), where the harness's work is streamed live.
+
+![The crash detected in the app, analysis started](docs/images/03-crash-detected.png)
+
+**4. The PR is opened.** Both platforms reproduced the crash on the release and passed with the fix, so a draft PR is opened with the `self-healing` label.
+
+![The draft PR in the repository's pull request list](docs/images/04-pull-requests.png)
+
+**5. The PR description.** It links the Sentry issue, then gives the root cause, the fix, the changed files and the verification results for each platform. The repro steps are the same steps the Maestro flow runs. The stack trace is folded at the end.
+
+![The PR description: Sentry crash, root cause, fix, verification](docs/images/05-pr-description.png)
+
+**6. The crash video.** The comment under the PR holds the combined recording. On top, the release crashes on both platforms; the ring marks where the flow tapped. Below, the fixed build runs the same flow and Settings stays open. The GIF preview links to the full-quality MP4.
+
+![The crash video comment: release on top, fixed build below, Android left, iOS right](docs/images/06-crash-video.png)
+
 ## Requirements
 
 ### Always
