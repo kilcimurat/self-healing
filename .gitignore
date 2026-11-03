@@ -1,0 +1,10 @@
+.gradle/
+build/
+.idea/
+*.iml
+.kotlin/
+config.yml
+workspace/
+local.properties
+projects/
+.DS_Store

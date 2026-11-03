@@ -1,0 +1,96 @@
+# Self-Healing config.
+# Copy to config.yml (git-ignored). Values like ${VAR} come from environment variables,
+# ${VAR:-default} falls back to a default. Prefer env vars for tokens.
+
+server:
+  host: 0.0.0.0
+  port: 8787
+  # Public URL Sentry can reach. On a laptop, expose the port with a tunnel:
+  #   cloudflared tunnel --url http://localhost:8787   or   ngrok http 8787
+  # Leave empty to rely on polling only.
+  publicUrl: ${SELF_HEALING_PUBLIC_URL:-}
+
+sentry:
+  baseUrl: https://sentry.io            # or your self-hosted Sentry
+  authToken: ${SENTRY_AUTH_TOKEN}       # User Settings → Personal Tokens (sntryu_…): Project R/W, Issue & Event R, Organization R
+  organization: my-org
+  projects:
+    - slug: shop-android
+      repo: shop                        # id from `repos` below
+    - slug: shop-ios
+      repo: shop
+  webhook:
+    enabled: true                       # creates a Sentry service hook on Start (Business plan + server.publicUrl)
+    path: /sentry/webhook
+    events: [event.created]
+  polling:
+    enabled: true                       # fallback / no public URL
+    intervalSeconds: 60
+  filters:
+    levels: [fatal, error]
+    onlyUnhandled: true                 # only real crashes
+    onlyNewIssues: true                 # only crashes that reach Sentry after Start (new events on old issues included)
+
+github:
+  apiUrl: https://api.github.com        # GitHub Enterprise: https://ghe.example.com/api/v3
+  token: ${GITHUB_TOKEN}                # repo scope (contents + pull requests write)
+  draftPr: true
+  reviewers: []
+  labels: [self-healing]
+  assetsBranch: self-healing-assets     # crash video (orphan branch, outside the diff), shown in a PR comment
+  commitAuthorName: Self-Healing Bot
+  commitAuthorEmail: self-healing-bot@users.noreply.github.com
+
+repos:
+  # One entry per repository. A KMP repo lists both `android` and `ios`; a crash from either
+  # platform is then reproduced and verified on both.
+  - id: shop
+    url: https://github.com/my-org/shop.git
+    baseBranch: main
+    release:                            # reproduce on the crash's released version first
+      enabled: false
+      tag: v{version}                   # Sentry release app@1.0.5+105 → v1.0.5 ({build} = 105)
+      androidAsset: '.*\.apk'           # GitHub release APK; without one the tag is built from source
+      requireReproduction: false
+    testAccount:                        # signs in before the repro flow (crash paths behind login)
+      username: "test@example.com"
+      password: "${TEST_ACCOUNT_PASSWORD:-}"   # never sent to the harness; Maestro gets it at run time
+      loginHint: ""
+    android:
+      buildCommand: ./gradlew :app:installDebug
+      applicationId: com.example.shop
+      launchActivity: ""                # empty = launcher activity
+      avd: ""                           # e.g. Pixel_8: started headless and shown inside the app
+      device: ""                        # adb serial; empty = the AVD above / the only device
+      reproCommand: ""                  # fallback when the harness writes no Maestro flow
+      cleanInstall: true
+      dnsServers: [8.8.8.8, 1.1.1.1]   # emulator DNS; empty = host DNS at boot (breaks when the network/VPN changes)
+    ios:
+      buildCommand: >-
+        xcodebuild -workspace Shop.xcworkspace -scheme Shop -configuration Debug
+        -sdk iphonesimulator -derivedDataPath build/self-healing CODE_SIGNING_ALLOWED=NO build
+      appPath: build/self-healing/Build/Products/Debug-iphonesimulator/Shop.app
+      bundleId: com.example.shop
+      simulator: iPhone 16
+      openSimulatorApp: false
+
+harness:
+  type: claude-code                     # claude-code | codex | custom
+  model: claude-opus-5-5
+  # custom only — placeholders: {model} {promptFile} {repoDir} {resultFile}
+  command: ""
+  extraArgs: []
+  # Extra env for the harness process. Omit to use the CLI's own login.
+  env: {}
+  #  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  timeoutMinutes: 30
+
+pipeline:
+  # Relative paths resolve against this config file's folder.
+  workDir: ./workspace                  # runs, screenshots, prompts
+  cloneDir: ./projects                  # repos are cloned here (projects/<repo>)
+  maxConcurrent: 1
+  branchPrefix: self-healing/
+  verifyWaitSeconds: 15
+  buildTimeoutMinutes: 30
+  maestroCommand: maestro               # PATH, then ~/.maestro/bin
