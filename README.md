@@ -1,151 +1,151 @@
 # Self-Healing
 
-Sentry'ye düşen crash'leri yakalar ve `config.yml`'da seçilen kodlama ajanına (Claude Code, Codex ya da özel bir CLI) düzelttirir. Ardından crash'i, crash'in oluştuğu **release sürümünde** Android emülatörde ve iOS simülatörde yeniden üretmeye çalışır. Düzeltilmiş uygulamayı **iki platformda da** derleyip test eder ve repoya PR açar. PR'a iki platformun kayıtlarından oluşan tek bir crash videosu eklenir.
+Self-Healing catches the crashes that reach Sentry and has a coding agent fix them. You choose the agent in `config.yml`: Claude Code, Codex or a custom CLI. It then tries to reproduce each crash on the **release build** it happened in, on an Android emulator and an iOS simulator. It builds and tests the fixed app on **both platforms** and opens a pull request. The PR gets a single crash video made from both platforms' recordings.
 
-| Modül | Ne işe yarar |
+| Module | What it does |
 |---|---|
-| `core` | Motor: Sentry webhook/polling, harness, git, cihaz yönetimi, doğrulama, PR (KMP, JVM) |
-| `desktop` | Compose Multiplatform masaüstü uygulaması (macOS, Windows, Linux) |
-| `server` | Arayüzsüz sunucu modu: aynı motor, loglar stdout'a yazılır |
+| `core` | The engine: Sentry webhook/polling, harness, git, device management, verification, PR (KMP, JVM) |
+| `desktop` | Compose Multiplatform desktop app (macOS, Windows, Linux) |
+| `server` | Headless server mode: the same engine, with logs written to stdout |
 
-## Ekran
+## Screen
 
 ```
 ┌──────────────────────────────┬────────────────────────────┐
-│ Crash'ler (1/3)              │                            │
+│ Crashes (1/3)                │                            │
 ├──────────────┬───────────────┤        Terminal            │
 │   Android    │      iOS      │  (harness / build / git)   │
-│  emülatörü   │  simülatörü   │                            │
+│   emulator   │   simulator   │                            │
 │   (2/3)      │               │                            │
 └──────────────┴───────────────┴────────────────────────────┘
 ```
 
-**Başlat**'a basıldığında Android emülatörü (`android.avd`) ve iOS simülatörü (`ios.simulator`) ayrı pencere açmadan arka planda başlar ve ekranları sol alttaki alanda canlı görünür. Ekranlara tıklayıp kaydırabilirsiniz: Android'de bu `adb` ile, iOS'ta [AXe](https://github.com/cameroncooke/AXe) ile yapılır. Ekranların altında Geri / Ana ekran / Son butonları bulunur.
+When you press **Başlat** (Start), the Android emulator (`android.avd`) and the iOS simulator (`ios.simulator`) start in the background without their own windows. Their screens appear live in the lower-left area. You can tap and swipe on them: through `adb` on Android and through [AXe](https://github.com/cameroncooke/AXe) on iOS. Back / Home / Recents buttons sit under the screens.
 
-## Akış
+## Flow
 
 ```
 Sentry ──webhook/polling──► crash
-  1. Hazırlık     : projects/<repo> klonu → izole git worktree + yeni branch
-  2. Analiz       : harness kök nedeni bulur, düzeltir, result.json ve Maestro senaryosu (repro.yaml) yazar
-  3. Tekrar üret  : crash'in sürümü (örn. v1.1.0) iki cihaza kurulur, senaryo çalışır → "crash Android'de / iOS'ta var mı?"
-                    Android: GitHub release'teki APK · iOS: tag simülatör için kaynak koddan derlenir
-                    Uygulama açılışından crash'ten birkaç saniye sonrasına kadar iki ekran da videoya kaydedilir
-  4. Doğrulama    : düzeltilmiş sürüm iki cihaza kurulur, aynı senaryo aynı şekilde kaydedilir,
-                    ardından arka plan/ön plan turu → crash yok mu?
-  5. Video        : 4 kayıt ffmpeg ile tek videoda birleşir: solda Android, sağda iOS; üstte release, altta düzeltme.
-                    Maestro'nun dokunduğu her nokta videoda halka olarak görünür
-  6. PR           : iki platform da geçtiyse draft PR açılır; yalnızca harness'ın değiştirdiği dosyalar commit'lenir
-                    (build'in güncellediği Package.resolved vb. geri alınır). Video (MP4 + önizleme GIF) ayrı
-                    `self-healing-assets` branch'ine gider ve PR'a yorum olarak eklenir
+  1. Prepare     : clone into projects/<repo> → isolated git worktree + new branch
+  2. Analyze     : the harness finds the root cause, fixes it, writes result.json and a Maestro flow (repro.yaml)
+  3. Reproduce   : the crash's version (e.g. v1.1.0) is installed on both devices and the flow runs → "does it crash on Android / iOS?"
+                   Android: the APK from the GitHub release · iOS: the tag is built from source for the simulator
+                   Both screens are recorded from app launch until a few seconds after the crash
+  4. Verify      : the fixed build is installed on both devices, the same flow is recorded the same way,
+                   then a background/foreground round trip → no crash?
+  5. Video       : ffmpeg combines the 4 recordings into one video: Android left, iOS right; release on top, fix below.
+                   Every point Maestro tapped is marked with a ring
+  6. PR          : if both platforms pass, a draft PR is opened; only the files the harness changed are committed
+                   (Package.resolved and similar files rewritten by the build are reverted). The video (MP4 + GIF preview)
+                   goes to a separate `self-healing-assets` branch and is added to the PR as a comment
 ```
 
-Bir adım başarısız olursa PR açılmaz ve crash `FAILED` durumunda kalır. Her crash'in tüm logu `workspace/artifacts/<crash-id>/run.log` dosyasına yazılır.
+If a step fails, no PR is opened and the crash stays `FAILED`. The full log of each crash is written to `workspace/artifacts/<crash-id>/run.log`.
 
-Çalışma bittiğinde (PR açılsa da hata alsa da) o çalışmanın kalıntıları silinir:
+When a run ends, whether a PR was opened or it failed, its leftovers are deleted:
 
-- `workspace/runs/` altındaki worktree, build çıktılarıyla birlikte silinir.
-- Yerel branch silinir; PR branch'i GitHub'da kalır.
-- `workspace/releases/` altındaki release checkout'u silinir. Aynı sürümü kullanan başka bir crash hâlâ çalışıyorsa, o da bitene kadar tutulur.
-- APK, video ve ekran görüntüleri silinir. PR açıldıysa klasörde yalnızca `run.log`, `result.json` ve `repro.yaml` kalır. Çalışma başarısız olduysa, hatayı inceleyebilmek için ekran görüntüleri ve Maestro'nun hata anındaki çıktısı (`maestro-*`) da saklanır.
+- The worktree under `workspace/runs/` is deleted together with its build output.
+- The local branch is deleted; the PR branch stays on GitHub.
+- The release checkout under `workspace/releases/` is deleted. If another crash of the same version is still running, it is kept until that one finishes too.
+- The APK, videos and screenshots are deleted. After a PR, only `run.log`, `result.json` and `repro.yaml` remain. After a failed run, the screenshots and Maestro's output at the failing step (`maestro-*`) are kept as well, so the failure can be investigated.
 
-Video ve ekran görüntüleri PR'da durmaya devam eder. Arayüzdeki "Tekrar dene" ile çalışma yeniden başlatılabilir.
+The video and screenshots stay available in the PR. **Tekrar dene** (Retry) in the app starts a run again.
 
-Senaryo crash olmadan başarısız olursa (örneğin yoğun makinede klavye zamanında kapanmayıp bir butonu örterse) bir kez daha denenir. Crash olursa yeniden denenmez.
+If the flow fails without a crash (for example, on a busy machine the keyboard doesn't close in time and covers a button), it is retried once. A crash is never retried.
 
-## Gereksinimler
+## Requirements
 
-### Her zaman
-| Araç | Neden | Kurulum |
+### Always
+| Tool | Why | Install |
 |---|---|---|
-| JDK 17+ | Uygulamayı çalıştırmak için | `brew install --cask temurin@17` |
-| git | Klonlama, worktree, push | macOS'ta Xcode Command Line Tools ile gelir |
-| Harness CLI | Crash'i düzeltir | Claude Code: `npm install -g @anthropic-ai/claude-code`, ardından `claude` ile giriş · Codex: `npm install -g @openai/codex`, ardından `codex login` |
-| **Maestro** | Harness'ın yazdığı crash senaryosunu iki cihazda çalıştırır | `curl -fsSL "https://get.maestro.mobile.dev" \| bash` (`~/.maestro/bin` altına kurulur, uygulama orada da arar) |
-| **ffmpeg** | Kayıtları tek videoda birleştirir, PR için GIF önizleme üretir | `brew install ffmpeg` · Ubuntu: `sudo apt install ffmpeg` · Windows: `winget install ffmpeg` |
+| JDK 17+ | Runs the app | `brew install --cask temurin@17` |
+| git | Cloning, worktrees, pushing | Comes with the Xcode Command Line Tools on macOS |
+| Harness CLI | Fixes the crash | Claude Code: `npm install -g @anthropic-ai/claude-code`, then sign in with `claude` · Codex: `npm install -g @openai/codex`, then `codex login` |
+| **Maestro** | Runs the harness-written crash flow on both devices | `curl -fsSL "https://get.maestro.mobile.dev" \| bash` (installs into `~/.maestro/bin`, where the app also looks) |
+| **ffmpeg** | Combines the recordings into one video and makes the GIF preview for the PR | `brew install ffmpeg` · Ubuntu: `sudo apt install ffmpeg` · Windows: `winget install ffmpeg` |
 
-Maestro kurulu değilse senaryo adımı atlanır. Bu durumda doğrulama yalnızca "uygulama açılıyor ve çökmüyor" kontrolüne iner. ffmpeg yoksa video birleştirilmez ve PR yorumuna ekran görüntüleri tablosu eklenir.
+Without Maestro the flow step is skipped, and verification falls back to "the app launches and doesn't crash". Without ffmpeg the recordings are not combined, and the PR comment gets a table of screenshots instead.
 
 ### Android
-| Araç | Neden | Kurulum |
+| Tool | Why | Install |
 |---|---|---|
-| Android SDK (platform-tools, emulator) | Build, `adb`, emülatör | Android Studio ile gelir. Konum `ANDROID_HOME` ya da varsayılan konumdan bulunur (`~/Library/Android/sdk`, `~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`) |
-| Bir AVD | Testin yapılacağı emülatör | Android Studio → Device Manager. Adını `android.avd`'ye yazın (örn. `Pixel_10`) |
+| Android SDK (platform-tools, emulator) | Builds, `adb`, emulator | Comes with Android Studio. Found through `ANDROID_HOME` or the default location (`~/Library/Android/sdk`, `~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`) |
+| An AVD | The emulator the tests run on | Android Studio → Device Manager. Put its name in `android.avd` (e.g. `Pixel_10`) |
 
-### iOS (yalnızca macOS)
-| Araç | Neden | Kurulum |
+### iOS (macOS only)
+| Tool | Why | Install |
 |---|---|---|
-| Xcode + iOS Simulator runtime | Build ve simülatör | App Store'dan Xcode, ardından Settings → Components. Simülatör adını `ios.simulator`'a yazın |
-| **AXe** | iOS ekranına dokunma ve kaydırma | `brew install cameroncooke/axe/axe` |
+| Xcode + iOS Simulator runtime | Builds and the simulator | Xcode from the App Store, then Settings → Components. Put the simulator name in `ios.simulator` |
+| **AXe** | Tapping and swiping on the iOS screen | `brew install cameroncooke/axe/axe` |
 
-AXe kurulu değilse iOS ekranı yalnızca izlenebilir. Elle dokunmanız gerekirse `openSimulatorApp: true` ile Simulator.app penceresini de açabilirsiniz.
+Without AXe the iOS screen is view-only. If you need to tap by hand, `openSimulatorApp: true` also opens the Simulator.app window.
 
-### İsteğe bağlı
-| Araç | Neden | Kurulum |
+### Optional
+| Tool | Why | Install |
 |---|---|---|
-| cloudflared / ngrok | Sentry webhook'unun makinenize ulaşması. Yoksa 60 saniyelik polling kullanılır | `brew install cloudflared` |
-| gh | GitHub işlemlerini elle kontrol etmek | `brew install gh` |
+| cloudflared / ngrok | Lets the Sentry webhook reach your machine. Without it, 60-second polling is used | `brew install cloudflared` |
+| gh | Checking GitHub by hand | `brew install gh` |
 
-## Token'lar
+## Tokens
 
-| Alan | Nereden | Yetkiler |
+| Field | Where from | Permissions |
 |---|---|---|
-| `sentry.authToken` | Sentry → User Settings → **Personal Tokens**. Token `sntryu_` ile başlar. Organization token'ları (`sntrys_`) çalışmaz | Project: Read & Write · Issue & Event: Read · Organization: Read |
-| `github.token` | GitHub → Settings → Developer settings → **Fine-grained token**, yalnızca ilgili repolara | Contents, Pull requests, Issues: Read & Write |
+| `sentry.authToken` | Sentry → User Settings → **Personal Tokens**. The token starts with `sntryu_`. Organization tokens (`sntrys_`) don't work | Project: Read & Write · Issue & Event: Read · Organization: Read |
+| `github.token` | GitHub → Settings → Developer settings → **Fine-grained token**, limited to the relevant repositories | Contents, Pull requests, Issues: Read & Write |
 
-Sentry'nin AB bölgesindeki organizasyonlarda `sentry.baseUrl: https://de.sentry.io` kullanın. Webhook için gereken service hook özelliği yalnızca Sentry'nin Business planında var. Diğer planlarda uygulama sorgulama (polling) ile çalışır; ayrıntılar [config bölümünde](#configyml-doldurma).
+For organizations in Sentry's EU region, use `sentry.baseUrl: https://de.sentry.io`. The service hook feature the webhook needs is only on Sentry's Business plan. On other plans the app works by polling; see the [config section](#filling-in-configyml) for details.
 
-## Test hesabı
+## Test account
 
-Crash'e giden yol giriş gerektiriyorsa (örneğin Recoup'ta Ayarlar ekranı), `repos[].testAccount` ayarına bir test hesabı girin:
+If the path to the crash requires signing in, enter a test account in `repos[].testAccount`:
 
 ```yaml
 testAccount:
   username: "qa@example.com"
-  password: "${TEST_ACCOUNT_PASSWORD}"   # ya da düz metin; config.yml git'e eklenmez
+  password: "${TEST_ACCOUNT_PASSWORD}"   # or plain text; config.yml is never committed
   loginHint: "Continue with email → Email / Password → Sign in"
 ```
 
-Şifre harness'a (LLM'e) **hiç gönderilmez**. Harness senaryoya yalnızca `${TEST_USERNAME}` ve `${TEST_PASSWORD}` yazar; gerçek değerleri Maestro çalışma anında `-e` ile alır. Şifre loglarda `***` olarak maskelenir. Bunun için yalnızca test amaçlı bir hesap kullanın.
+The password is **never sent** to the harness (the LLM). The harness only writes `${TEST_USERNAME}` and `${TEST_PASSWORD}` into the flow, and Maestro receives the real values at run time through `-e`. The password is masked as `***` in logs. Use an account meant only for testing.
 
-## Crash videosu
+## Crash video
 
-- **Kayıt:** Android'de `adb shell screenrecord` kullanılır (en fazla 3 dakika). iOS'ta `xcrun simctl io recordVideo` kullanılır.
-- **Dokunuşlar:** pencere olmadan çalışan emülatör ve simülatör dokunuşları ekranda göstermez. Bu yüzden Maestro'nun logladığı dokunuş koordinatları (`workspace/artifacts/<crash-id>/maestro-*`) birleştirme sırasında videoya halka olarak çizilir.
-- **Birleştirme:** ızgarada solda Android, sağda iOS; üstte release, altta düzeltilmiş sürüm yer alır. Kısa kalan kayıt, son karesinde (örneğin crash anında) durur.
-- **PR yorumu:** GitHub, repodaki MP4'ü yorumun içinde oynatmaz. Bu yüzden yorumda GIF önizleme gösterilir, tam kalite MP4'e link verilir.
+- **Recording:** `adb shell screenrecord` on Android (3 minutes at most), `xcrun simctl io recordVideo` on iOS.
+- **Taps:** an emulator or simulator running without a window doesn't show taps on screen. So the tap coordinates Maestro logs (`workspace/artifacts/<crash-id>/maestro-*`) are drawn onto the video as rings when it is combined.
+- **Layout:** a grid with Android on the left and iOS on the right, the release build on top and the fixed build below. A shorter recording holds on its last frame (for example, the moment of the crash).
+- **PR comment:** GitHub doesn't play an MP4 from a repository inside a comment, so the comment shows a GIF preview and links to the full-quality MP4.
 
-Videoda test hesabının kullanıcı adı (e-posta) giriş ekranında görünür. Şifre alanı maskelidir. Bu nedenle yalnızca test amaçlı bir hesap kullanın.
+The test account's username (email) is visible on the sign-in screen in the video. The password field is masked. This is another reason to use an account meant only for testing.
 
-## Release'te tekrar üretme
+## Reproducing on the release
 
-`repos[].release` ayarı açıksa, Sentry'deki sürüm (`app@1.1.0+110`) `tag` şablonuyla (`v{version}`) tag'e çevrilir:
+When `repos[].release` is enabled, the Sentry release (`app@1.1.0+110`) is turned into a git tag with the `tag` template (`v{version}`):
 
-- **Android:** GitHub release'inden `androidAsset` desenine uyan APK indirilir. APK yoksa tag kaynak koddan derlenir.
-- **iOS:** release'teki IPA cihaz build'i olduğu için simülatörde çalışmaz. Bu yüzden tag `workspace/releases/` altında açılıp simülatör için derlenir.
+- **Android:** the APK matching the `androidAsset` pattern is downloaded from the GitHub release. Without one, the tag is built from source.
+- **iOS:** the IPA in a release is a device build and doesn't run on the simulator. So the tag is checked out under `workspace/releases/` and built for the simulator.
 
-## config.yml doldurma
+## Filling in config.yml
 
-Uygulamanın ihtiyaç duyduğu her şey tek bir dosyadan okunur: token'lar, repolar, cihazlar, harness ve model. Örnek dosyadan bir kopya oluşturun:
+Everything the app needs comes from a single file: tokens, repositories, devices, harness and model. Make a copy of the example:
 
 ```bash
 cp config.example.yml config.yml
 ```
 
-`config.yml` **`.gitignore`'dadır ve asla commit'lenmemelidir**; içinde kişisel token'larınız olacak.
+`config.yml` is in **`.gitignore` and must never be committed**; it will hold your personal tokens.
 
-### Genel kurallar
+### General rules
 
-- **Ortam değişkenleri:** bir değer `${DEGISKEN}` biçiminde yazılırsa ortam değişkeninden okunur, `${DEGISKEN:-varsayılan}` biçiminde yazılırsa değişken yoksa varsayılan kullanılır. Token'ları dosyaya yazmak yerine böyle vermek daha güvenlidir:
+- **Environment variables:** a value written as `${VARIABLE}` is read from the environment, and `${VARIABLE:-default}` falls back to the default when the variable isn't set. Passing tokens this way is safer than writing them into the file:
   ```bash
   export SENTRY_AUTH_TOKEN=sntryu_...
   export GITHUB_TOKEN=github_pat_...
   ```
-  Yorum satırlarındaki `${...}` ifadeleri değiştirilmez.
-- **Göreli yollar:** `./workspace` gibi yollar, `config.yml`'ın bulunduğu klasöre göre çözülür.
-- **Kontrol:** dosyayı doldurduktan sonra `./gradlew :core:jvmTest` çalıştırın. Testlerden biri yerel `config.yml`'ınızı okur ve yazım hatalarını gösterir.
+  `${...}` inside comments is left untouched.
+- **Relative paths:** paths such as `./workspace` are resolved against the folder `config.yml` is in.
+- **Checking:** after filling it in, run `./gradlew :core:jvmTest`. One of the tests reads your local `config.yml` and reports mistakes.
 
-### 1. `sentry` — crash'lerin geldiği yer
+### 1. `sentry` — where the crashes come from
 
 ```yaml
 sentry:
@@ -159,14 +159,14 @@ sentry:
       repo: shop
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `baseUrl` | ABD bölgesi için `https://sentry.io`, AB bölgesi için `https://de.sentry.io`, kendi sunucunuz için onun adresi. Organizasyonunuzun adresinde `de.sentry.io` görüyorsanız AB'dir. |
-| `authToken` | Sentry → User Settings → **Personal Tokens** → Create New Token. Yetkiler: Project **Read & Write**, Issue & Event **Read**, Organization **Read**. Token `sntryu_` ile başlamalı; organization token'ları (`sntrys_`) issue listesine erişemez. |
-| `organization` | Organizasyonun kısa adı (slug). Adres çubuğunda `sentry.io/organizations/<slug>/` olarak görünür. |
-| `projects` | İzlenecek her Sentry projesi için bir satır. `slug` projenin kısa adı, `repo` ise aşağıdaki `repos` listesindeki `id`. İki platformu tek repoda olan bir uygulamada iki proje aynı `repo`'yu gösterir. |
+| `baseUrl` | `https://sentry.io` for the US region, `https://de.sentry.io` for the EU region, or the address of your own server. If your organization's address contains `de.sentry.io`, it is in the EU. |
+| `authToken` | Sentry → User Settings → **Personal Tokens** → Create New Token. Permissions: Project **Read & Write**, Issue & Event **Read**, Organization **Read**. The token must start with `sntryu_`; organization tokens (`sntrys_`) can't read the issue list. |
+| `organization` | The organization's short name (slug). It appears in the address bar as `sentry.io/organizations/<slug>/`. |
+| `projects` | One line per Sentry project to watch. `slug` is the project's short name, and `repo` is an `id` from the `repos` list below. For an app with both platforms in one repository, both projects point to the same `repo`. |
 
-**Crash'lerin nasıl alınacağı:**
+**How crashes are received:**
 
 ```yaml
   webhook:
@@ -177,14 +177,14 @@ sentry:
     intervalSeconds: 60
 ```
 
-- **Polling (sorgulama, önerilen):** her `intervalSeconds` saniyede bir Sentry'ye "Başlat'tan sonra gelen yeni crash var mı?" diye sorar. Her planda ve her ağda çalışır. Tek eksiği, crash'in en fazla `intervalSeconds` saniye gecikmeyle gelmesi.
-- **Webhook:** Sentry crash'i anında gönderir. Bunun için iki şart var:
-  1. **Business planı:** Sentry'nin service hook özelliği yalnızca bu planda var.
-  2. **Erişilebilir adres:** makinenizin internetten erişilebilir bir adresi olmalı. `server.publicUrl`'a bir tünel adresi yazılır; örneğin `cloudflared tunnel --url http://localhost:8787` komutunun verdiği adres.
+- **Polling (recommended):** every `intervalSeconds`, it asks Sentry whether new crashes arrived since Start. It works on every plan and every network. The only drawback is that a crash can arrive up to `intervalSeconds` late.
+- **Webhook:** Sentry sends the crash immediately. This has two requirements:
+  1. **Business plan:** Sentry's service hook feature is only on this plan.
+  2. **Reachable address:** your machine needs an address reachable from the internet. Put a tunnel address in `server.publicUrl`, for example the one `cloudflared tunnel --url http://localhost:8787` prints.
 
-  `publicUrl` boşsa webhook atlanır ve yalnızca polling kullanılır.
+  If `publicUrl` is empty, the webhook is skipped and only polling is used.
 
-**Hangi crash'lerin işleneceği:**
+**Which crashes are processed:**
 
 ```yaml
   filters:
@@ -193,35 +193,35 @@ sentry:
     onlyNewIssues: true
 ```
 
-- `levels`: yalnızca bu seviyedeki olaylar işlenir.
-- `onlyUnhandled`: yalnızca yakalanmamış istisnalar, yani gerçek crash'ler işlenir.
-- `onlyNewIssues`: yalnızca Başlat'tan sonra Sentry'ye ulaşan crash'ler işlenir. Eski bir issue'ya yeni olay gelmesi de sayılır. Android, çöken uygulamanın raporunu uygulama bir sonraki açılışında gönderir; bu rapor da yakalanır.
+- `levels`: only events at these levels are processed.
+- `onlyUnhandled`: only unhandled exceptions, i.e. real crashes, are processed.
+- `onlyNewIssues`: only crashes that reach Sentry after Start are processed. A new event on an old issue counts too. Android sends a crashed app's report on the app's next launch, and that report is caught as well.
 
-### 2. `github` — PR'ların açılacağı yer
+### 2. `github` — where the PRs are opened
 
 ```yaml
 github:
   apiUrl: https://api.github.com
   token: ${GITHUB_TOKEN}
   draftPr: true
-  reviewers: [ekip-arkadasi]
+  reviewers: [teammate]
   labels: [self-healing]
   assetsBranch: self-healing-assets
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `apiUrl` | github.com için olduğu gibi bırakın. GitHub Enterprise için `https://<sunucu>/api/v3`. |
-| `token` | GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate. *Resource owner*: repoların sahibi olan hesap ya da organizasyon. *Repository access*: yalnızca düzeltilecek repolar. *Permissions*: **Contents**, **Pull requests** ve **Issues** için Read and write. |
-| `draftPr` | `true`: PR'lar taslak olarak açılır. İnceleme sonrası siz "Ready for review" yaparsınız. |
-| `reviewers` | PR'a otomatik atanacak GitHub kullanıcı adları; boş bırakılabilir. |
-| `labels` | PR'a eklenecek etiketler. |
-| `assetsBranch` | Videoların ve ekran görüntülerinin konduğu ayrı branch. İlk PR'da kendiliğinden oluşur ve PR'ların diff'ine hiç girmez. |
-| `commitAuthorName`, `commitAuthorEmail` | İsteğe bağlı: düzeltme commit'lerinin yazar bilgisi. Varsayılan "Self-Healing Bot". |
+| `apiUrl` | Leave as is for github.com. For GitHub Enterprise, `https://<server>/api/v3`. |
+| `token` | GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate. *Resource owner*: the account or organization that owns the repositories. *Repository access*: only the repositories to be fixed. *Permissions*: Read and write for **Contents**, **Pull requests** and **Issues**. |
+| `draftPr` | `true`: PRs are opened as drafts. You mark them "Ready for review" after reviewing. |
+| `reviewers` | GitHub usernames assigned to the PR automatically; can be left empty. |
+| `labels` | Labels added to the PR. |
+| `assetsBranch` | A separate branch for videos and screenshots. It is created on the first PR and never appears in any PR's diff. |
+| `commitAuthorName`, `commitAuthorEmail` | Optional: the author of the fix commits. Defaults to "Self-Healing Bot". |
 
-### 3. `repos` — düzeltilecek uygulamalar
+### 3. `repos` — the apps to fix
 
-Her repo için bir girdi yazılır. Bir repo hem `android` hem `ios` içeriyorsa (örneğin Kotlin Multiplatform), crash hangi platformdan gelirse gelsin **iki platformda da** tekrar üretilir ve doğrulanır. Android ve iOS ayrı repolardaysa iki ayrı girdi yazılır.
+Write one entry per repository. If a repository has both `android` and `ios` (Kotlin Multiplatform, for example), a crash from either platform is reproduced and verified on **both**. If Android and iOS live in separate repositories, write two entries.
 
 ```yaml
 repos:
@@ -230,9 +230,9 @@ repos:
     baseBranch: main
 ```
 
-- `id`: `sentry.projects[].repo` alanında kullanılacak serbest bir ad.
-- `url`: HTTPS klon adresi. Repo `pipeline.cloneDir` altına bir kez klonlanır.
-- `baseBranch`: düzeltme branch'inin açılacağı ve PR'ın hedefleyeceği branch.
+- `id`: a free-form name used in `sentry.projects[].repo`.
+- `url`: the HTTPS clone address. The repository is cloned once under `pipeline.cloneDir`.
+- `baseBranch`: the branch the fix branch starts from and the PR targets.
 
 **Android:**
 
@@ -244,18 +244,18 @@ repos:
       dnsServers: [8.8.8.8, 1.1.1.1]
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `buildCommand` | Repo kökünde çalışan ve debug uygulamayı **cihaza kuran** komut. Çok modüllü projede modülü ve varyantı yazın, örneğin `./gradlew :app:installProdDebug`. |
-| `applicationId` | Kurulan uygulamanın paket adı. Debug varyantında sonek varsa (`.debug` gibi) onunla birlikte yazın. |
-| `avd` | Android Studio → Device Manager'daki emülatörün adı. `emulator -list-avds` komutuyla da görülebilir. Başlat'ta pencere açılmadan başlatılır ve uygulamada gösterilir. |
-| `device` | Emülatör yerine gerçek bir cihaz kullanılacaksa `adb devices`'taki seri numarası. Boşsa `avd` kullanılır. |
-| `launchActivity` | Boş bırakın; uygulama varsayılan başlatıcı ekranıyla açılır. |
-| `cleanInstall` | `true`: kurulumdan önce uygulama kaldırılır. Mağaza ya da release imzalı bir kurulum debug kurulumunu engellemesin diye gerekir. |
-| `dnsServers` | Emülatörün DNS sunucuları. Boş bırakılırsa emülatör bilgisayarın açılış anındaki DNS'ini kullanır. Ağ ya da VPN değişince bu bozulur ve giriş gibi ağ istekleri takılır. |
-| `reproCommand` | İsteğe bağlı: harness Maestro senaryosu yazmazsa kullanılacak kendi senaryo komutunuz. |
+| `buildCommand` | A command run from the repository root that builds the debug app and **installs it on the device**. In a multi-module project, name the module and variant, e.g. `./gradlew :app:installProdDebug`. |
+| `applicationId` | The package name of the installed app. If the debug variant adds a suffix (such as `.debug`), include it. |
+| `avd` | The emulator's name in Android Studio → Device Manager, also listed by `emulator -list-avds`. It is started on Start without a window and shown in the app. |
+| `device` | The serial from `adb devices` if a real device should be used instead of an emulator. When empty, `avd` is used. |
+| `launchActivity` | Leave empty; the app opens with its default launcher screen. |
+| `cleanInstall` | `true`: the app is uninstalled before installing, so a store or release-signed install can't block the debug install. |
+| `dnsServers` | The emulator's DNS servers. When empty, the emulator uses the host's DNS from boot time. That breaks when the network or VPN changes, and network calls such as sign-in hang. |
+| `reproCommand` | Optional: your own flow command, used when the harness writes no Maestro flow. |
 
-**iOS (yalnızca macOS):**
+**iOS (macOS only):**
 
 ```yaml
     ios:
@@ -267,15 +267,15 @@ repos:
       simulator: iPhone 16
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `buildCommand` | Simülatör için derleyen komut. `-project` ya da `-workspace` ile `-scheme` projenize göre değişir. `CODE_SIGNING_ALLOWED=NO` imzasız derler, böylece sertifika gerekmez. CocoaPods kullanılıyorsa başına `pod install && ` ekleyin. |
-| `appPath` | Derlenen `.app`'in repo köküne göre yolu. `-derivedDataPath` ile aynı klasörden başlar. |
-| `bundleId` | Uygulamanın bundle identifier'ı. |
-| `simulator` | `xcrun simctl list devices` çıktısındaki bir simülatör adı ya da UDID'si. |
-| `openSimulatorApp` | `true`: Simulator.app penceresini de açar. AXe kurulu değilse elle dokunmak için kullanılır. |
+| `buildCommand` | A command that builds for the simulator. `-project` or `-workspace` and `-scheme` depend on your project. `CODE_SIGNING_ALLOWED=NO` builds unsigned, so no certificate is needed. If you use CocoaPods, prefix it with `pod install && `. |
+| `appPath` | The path of the built `.app`, relative to the repository root. It starts with the same folder as `-derivedDataPath`. |
+| `bundleId` | The app's bundle identifier. |
+| `simulator` | A simulator name or UDID from `xcrun simctl list devices`. |
+| `openSimulatorApp` | `true`: also opens the Simulator.app window, for tapping by hand when AXe isn't installed. |
 
-**Release'te tekrar üretme:**
+**Reproducing on the release:**
 
 ```yaml
     release:
@@ -285,12 +285,12 @@ repos:
       requireReproduction: false
 ```
 
-- `enabled`: crash önce, oluştuğu sürümde tekrar üretilir.
-- `tag`: Sentry'deki sürümün (`com.example.shop@1.2.0+120`) git tag'ine nasıl çevrileceği. `{version}` = `1.2.0`, `{build}` = `120`. Tag'leriniz `v1.2.0` ise `v{version}` yazın.
-- `androidAsset`: GitHub Releases'taki APK dosyasına uyan desen. Uygun APK yoksa tag kaynak koddan `buildCommand` ile derlenir. iOS her zaman kaynaktan derlenir.
-- `requireReproduction`: `true` ise crash hiçbir platformda tekrar üretilemezse PR açılmaz.
+- `enabled`: the crash is first reproduced on the version it happened in.
+- `tag`: how the Sentry release (`com.example.shop@1.2.0+120`) maps to a git tag. `{version}` = `1.2.0`, `{build}` = `120`. If your tags look like `v1.2.0`, write `v{version}`.
+- `androidAsset`: a pattern matching the APK file in GitHub Releases. Without a matching APK, the tag is built from source with `buildCommand`. iOS is always built from source.
+- `requireReproduction`: when `true`, no PR is opened if the crash can't be reproduced on any platform.
 
-**Test hesabı** (crash'e giden yol giriş gerektiriyorsa):
+**Test account** (when the path to the crash requires signing in):
 
 ```yaml
     testAccount:
@@ -299,9 +299,9 @@ repos:
       loginHint: "Continue with email → Email / Password → Sign in"
 ```
 
-`loginHint`, harness'a giriş ekranına nasıl gidileceğini anlatan kısa bir ipucudur. Şifre harness'a gönderilmez; ayrıntılar için [Test hesabı](#test-hesabı) bölümüne bakın.
+`loginHint` is a short hint telling the harness how to reach the sign-in screen. The password is not sent to the harness; see [Test account](#test-account) for details.
 
-### 4. `harness` — düzeltmeyi yapan ajan
+### 4. `harness` — the agent that writes the fix
 
 ```yaml
 harness:
@@ -310,16 +310,16 @@ harness:
   timeoutMinutes: 30
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `type` | `claude-code`, `codex` ya da `custom`. Seçilen CLI'nin kurulu ve giriş yapılmış olması gerekir. |
-| `model` | CLI'ye verilecek model adı. |
-| `env` | İsteğe bağlı: CLI'ye verilecek ortam değişkenleri, örneğin `ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}`. Boşsa CLI'nin kendi oturumu kullanılır. |
-| `extraArgs` | CLI'ye eklenecek ek argümanlar. |
-| `command` | Yalnızca `custom` için komut şablonu. Kullanılabilen yer tutucular: `{model}`, `{promptFile}`, `{repoDir}`, `{resultFile}`. |
-| `timeoutMinutes` | Bir düzeltme için tanınan en uzun süre. |
+| `type` | `claude-code`, `codex` or `custom`. The chosen CLI must be installed and signed in. |
+| `model` | The model name passed to the CLI. |
+| `env` | Optional: environment variables for the CLI, e.g. `ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}`. When empty, the CLI's own login is used. |
+| `extraArgs` | Extra arguments for the CLI. |
+| `command` | Only for `custom`: the command template. Available placeholders: `{model}`, `{promptFile}`, `{repoDir}`, `{resultFile}`. |
+| `timeoutMinutes` | The longest time a fix may take. |
 
-### 5. `pipeline` ve `server`
+### 5. `pipeline` and `server`
 
 ```yaml
 pipeline:
@@ -331,19 +331,19 @@ pipeline:
   buildTimeoutMinutes: 30
 ```
 
-| Alan | Ne yazılır |
+| Field | What to put |
 |---|---|
-| `workDir` | Çalışma kopyaları, loglar ve kayıtlar. Büyük projelerde bir çalışma birkaç GB tutabilir; yeterli boş alanı olan bir disk seçin. Her çalışma bitince temizlenir. |
-| `cloneDir` | Repoların klonlandığı klasör (`projects/<repo>`). |
-| `maxConcurrent` | Aynı anda işlenecek crash sayısı. Cihazlar ortak olduğu için `1` önerilir. |
-| `branchPrefix` | Düzeltme branch'lerinin öneki. Branch adı `<önek><crash-id>-<başlık>` olur. |
-| `verifyWaitSeconds` | Senaryo yoksa uygulamanın çökmeden açık kalması gereken süre. |
-| `buildTimeoutMinutes` | Bir build için en uzun süre. |
-| `maestroCommand` | Maestro PATH'te değilse tam yolu. |
+| `workDir` | Working copies, logs and recordings. One run of a large project can take several GB; choose a disk with enough free space. Each run is cleaned up when it ends. |
+| `cloneDir` | The folder repositories are cloned into (`projects/<repo>`). |
+| `maxConcurrent` | How many crashes are processed at once. `1` is recommended, since the devices are shared. |
+| `branchPrefix` | The prefix of fix branches. A branch is named `<prefix><crash-id>-<title>`. |
+| `verifyWaitSeconds` | Without a flow, how long the app must stay open without crashing. |
+| `buildTimeoutMinutes` | The longest time a build may take. |
+| `maestroCommand` | The full path to Maestro if it isn't on the PATH. |
 
-`server` bölümü yalnızca webhook için gereklidir: `port` dinlenecek port, `publicUrl` ise Sentry'nin ulaşacağı adres. Polling kullanılıyorsa olduğu gibi bırakılabilir.
+The `server` section is only needed for the webhook: `port` is the port to listen on, and `publicUrl` is the address Sentry reaches. With polling, it can be left as is.
 
-### Yalnızca Android olan en küçük örnek
+### Smallest Android-only example
 
 ```yaml
 sentry:
@@ -372,25 +372,25 @@ harness:
   model: claude-opus-5-5
 ```
 
-Yazılmayan alanlar varsayılan değerleriyle çalışır.
+Fields left out use their defaults.
 
-## Çalıştırma
+## Running
 
-### Masaüstü
+### Desktop
 
 ```bash
 ./gradlew :desktop:run --args="$PWD/config.yml"
 ```
 
-macOS'ta Finder'dan [SelfHealing.command](SelfHealing.command) dosyasına çift tıklayarak da başlatabilirsiniz. Bu dosya Terminal'i açar ve yukarıdaki komutu proje klasöründe çalıştırır.
+On macOS you can also start it by double-clicking [SelfHealing.command](SelfHealing.command) in Finder. It opens Terminal and runs the command above in the project folder.
 
-Kurulum paketi (macOS `.dmg`, Windows `.msi`, Linux `.deb`) için:
+To build an installer (macOS `.dmg`, Windows `.msi`, Linux `.deb`):
 
 ```bash
 ./gradlew :desktop:packageDistributionForCurrentOS
 ```
 
-### Sunucu
+### Server
 
 ```bash
 ./gradlew :server:installDist
@@ -400,12 +400,12 @@ Kurulum paketi (macOS `.dmg`, Windows `.msi`, Linux `.deb`) için:
 server/build/install/server/bin/server --config /path/to/config.yml
 ```
 
-Sunucuda Android için KVM destekli bir Linux makine yeterli; emülatör ekransız (`-no-window`) çalışır. iOS doğrulaması için sunucunun macOS olması gerekir.
+For Android, a Linux machine with KVM is enough on the server; the emulator runs without a window (`-no-window`). iOS verification requires the server to run macOS.
 
-## Güvenlik
+## Security
 
-- Harness yalnızca izole bir worktree içinde çalışır. Commit, push ve PR işlerini harness değil uygulama yapar.
-- Token'lar loglarda `***` olarak maskelenir. Git kimlik doğrulaması HTTP header ile yapılır, token remote URL'ine yazılmaz.
-- Video ve ekran görüntüleri PR'ın diff'ine girmez; ayrı `self-healing-assets` branch'inde tutulur.
-- PR'lar varsayılan olarak **draft** açılır. Otomatik merge yoktur.
-- Build ve kurulum yalnızca config'deki cihaza yapılır (`ANDROID_SERIAL`); bilgisayara bağlı telefonlara dokunulmaz.
+- The harness only runs inside an isolated worktree. Commits, pushes and PRs are made by the app, not by the harness.
+- Tokens are masked as `***` in logs. Git authenticates through an HTTP header; the token is never written into the remote URL.
+- Videos and screenshots never enter the PR's diff; they live on the separate `self-healing-assets` branch.
+- PRs are opened as **drafts** by default. There is no automatic merge.
+- Builds and installs go only to the device in the config (`ANDROID_SERIAL`); phones connected to the computer are left alone.
